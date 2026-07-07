@@ -1,0 +1,6 @@
+.env
+data/raw/*.csv
+__pycache__/
+*.pyc
+cron_update.log
+nohup.out

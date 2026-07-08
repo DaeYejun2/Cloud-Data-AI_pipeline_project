@@ -56,6 +56,19 @@ st.markdown("""
         font-weight: 600;
         padding-bottom: 10px;
     }
+
+    /* 인사이트 콜아웃 박스 */
+    .insight-box {
+        background-color: #16232E;
+        border: 1px solid #1E3A4C;
+        border-left: 4px solid #00E5FF;
+        border-radius: 10px;
+        padding: 16px 20px;
+        margin: 6px 0 14px 0;
+        line-height: 1.7;
+        font-size: 0.95rem;
+    }
+    .insight-box b { color: #00E5FF; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -113,6 +126,12 @@ STOPWORDS = {
     "그러나", "하지만", "이러한", "해당", "당시", "이후", "이전", "동안", "관하여",
     "있다는", "없다는", "것으로", "것이", "것을", "것은", "수단", "내용", "사실",
 }
+
+
+def insight_box(html_lines):
+    """DB 값 기반으로 동적 생성되는 인사이트 콜아웃"""
+    st.markdown('<div class="insight-box">' + "<br>".join(html_lines) + "</div>",
+                unsafe_allow_html=True)
 
 
 def style_fig(fig, height=380):
@@ -376,6 +395,50 @@ def render_product_eda():
                               markers=True, color_discrete_sequence=CHART_COLORS)
                 st.plotly_chart(style_fig(fig, height=420), use_container_width=True)
 
+    # ---------- 종합 인사이트 (전체 데이터 기준 동적 계산) ----------
+    st.divider()
+    st.markdown("##### 📌 데이터가 말하는 것")
+
+    lines = []
+
+    # 1) 권역 간 예금 금리 격차
+    dep = rates[rates["category"] == "deposit"] if not rates.empty else pd.DataFrame()
+    if not dep.empty and dep["area_grp_nm"].nunique() >= 2:
+        by_area = dep.groupby("area_grp_nm")["rate"].mean().sort_values(ascending=False)
+        hi_a, lo_a = by_area.index[0], by_area.index[-1]
+        gap = by_area.iloc[0] - by_area.iloc[-1]
+        lines.append(f"<b>권역 간 금리 격차</b> — 정기예금 평균 기본금리는 {hi_a} {by_area.iloc[0]:.2f}% vs "
+                     f"{lo_a} {by_area.iloc[-1]:.2f}%로 <b>{gap:.2f}%p 차이</b>. 동일한 예금 상품이라도 "
+                     f"권역 선택만으로 수익 차가 발생하며, 이 격차가 소비자 이동과 분쟁 노출의 배경이 됨.")
+
+    # 2) 우대금리 스프레드
+    spread_df = rates[rates["category"].isin(["deposit", "saving"]) & rates["rate_max"].notna()] if not rates.empty else pd.DataFrame()
+    if not spread_df.empty:
+        spread = (spread_df["rate_max"] - spread_df["rate"]).mean()
+        max_spread = (spread_df["rate_max"] - spread_df["rate"]).max()
+        lines.append(f"<b>우대조건의 무게</b> — 예·적금의 우대금리는 기본금리보다 평균 <b>{spread:.2f}%p</b>, "
+                     f"최대 {max_spread:.2f}%p 높음. 광고되는 최고금리와 실수령 금리의 간극이 크다는 뜻으로, "
+                     f"우대조건(급여이체·카드실적 등) 충족 여부가 분쟁의 단골 쟁점이 되는 구조적 이유.")
+
+    # 3) 가입기간-금리 관계 강도
+    trm_all = rates[rates["save_trm"].notna()] if not rates.empty else pd.DataFrame()
+    if len(trm_all) > 30:
+        corr = trm_all["save_trm"].corr(trm_all["rate"])
+        lines.append(f"<b>기간보다 상품</b> — 가입기간과 기본금리의 상관계수는 <b>{corr:.2f}</b>에 그침. "
+                     f"'오래 맡길수록 이자가 높다'는 통념과 달리 금리는 기간보다 상품·회사 선택에 좌우되며, "
+                     f"회귀분석(교차 인사이트 탭)에서도 동일하게 확인됨.")
+
+    # 4) 판매 상태
+    if not df.empty:
+        act = df["is_active"].mean() * 100
+        lines.append(f"<b>공시의 생애주기</b> — 전체 수집 상품 중 <b>{act:.0f}%만 현재 판매중</b>. "
+                     f"나머지는 공시 종료된 이력 데이터로, 판매중 필터 없이 금리를 비교하면 "
+                     f"이미 사라진 특판 금리에 눈높이가 맞춰지는 착시가 생길 수 있음.")
+
+    if lines:
+        insight_box(lines)
+    st.caption("위 수치는 화면 조회 시점의 DB 집계로 자동 계산됩니다. (월배치 갱신 반영)")
+
 
 # ============================================================
 # 분쟁사례 EDA 탭
@@ -383,7 +446,7 @@ def render_product_eda():
 
 def render_dispute_eda():
     st.markdown("### ⚖️ 분쟁사례 EDA")
-    st.caption("금융감독원 분쟁조정사례 게시판 크롤링 데이터. 유형이 27개로 세분화되어 있어 권역 선택 후 드릴다운하는 방식으로 설계했습니다.")
+    st.caption("금융감독원 분쟁조정사례 게시판 크롤링 데이터.")
 
     df = load_disputes()
     if df.empty:
@@ -459,7 +522,7 @@ def render_dispute_eda():
 
     # ---------- 행 4: 민원 본문 키워드 빈도 ----------
     st.markdown(f"##### 민원 본문 키워드 빈도 Top 15 — {sel_area}")
-    st.caption("단순 어절 빈도 기준(형태소 분석 미적용). 조사가 결합된 형태가 섞일 수 있으며, 도메인 특화 전처리 고도화는 향후 개선 과제입니다.")
+    st.caption("단순 어절 빈도 기준(형태소 분석 미적용). 조사가 결합된 형태가 섞일 수 있습니다.")
 
     texts = filtered["complaint_text"].dropna()
     if texts.empty:
@@ -512,6 +575,46 @@ def render_dispute_eda():
                 else:
                     st.caption("해당 섹션이 없는 사례입니다. (parse_status: " + str(row["parse_status"]) + ")")
 
+    # ---------- 종합 인사이트 (전체 데이터 기준 동적 계산) ----------
+    st.divider()
+    st.markdown("##### 📌 데이터가 말하는 것")
+
+    lines = []
+
+    # 1) 권역 편중
+    ins_share = (df["area"] == "보험").mean() * 100
+    top_type = df["dispute_type"].value_counts()
+    lines.append(f"<b>분쟁의 무게중심은 보험</b> — 전체 {len(df)}건 중 <b>{ins_share:.0f}%가 보험 권역</b>이고, "
+                 f"단일 유형 1위는 '{top_type.index[0]}'({top_type.iloc[0]}건). 상품 스펙이 명확한 예·적금과 달리 "
+                 f"보험은 '지급 요건 해석'이 개입하는 구조라 분쟁이 집중되는 것으로 해석됨.")
+
+    # 2) 관심도(조회수) 편중
+    top10 = df.sort_values("view_count", ascending=False).head(10)
+    top10_ins = (top10["area"] == "보험").sum()
+    lines.append(f"<b>소비자 관심도 동조</b> — 조회수 상위 10건 중 <b>{top10_ins}건이 보험</b> 사례. "
+                 f"발생 건수뿐 아니라 소비자가 찾아보는 선례도 보험에 쏠려 있어, "
+                 f"보험 분쟁 정보의 접근성 개선이 실질 수요가 가장 큰 영역임을 시사.")
+
+    # 3) 키워드가 가리키는 분쟁의 성격
+    texts_all = df["complaint_text"].dropna()
+    if not texts_all.empty:
+        tokens_all = []
+        for t in texts_all:
+            tokens_all.extend(re.findall(r"[가-힣]{2,}", t))
+        pay_related = sum(1 for t in tokens_all if t.startswith(("지급", "부지급", "미지급")))
+        lines.append(f"<b>분쟁의 언어는 '지급'</b> — 민원 본문에서 '지급/부지급' 계열 어휘가 <b>{pay_related:,}회</b> 등장. "
+                     f"분쟁 대다수가 상품 자체의 하자가 아니라 <b>지급 심사·약관 해석 단계</b>에서 발생함을 보여주며, "
+                     f"이는 본 서비스가 상품 스펙과 분쟁 선례를 함께 보여주는 이유이기도 함.")
+
+    # 4) 본문 길이 = 사건 복잡도 프록시
+    len_by_area = df.groupby("area")["body_length"].mean().sort_values(ascending=False)
+    lines.append(f"<b>본문 길이는 복잡도의 프록시</b> — 권역별 평균 본문 길이는 {len_by_area.index[0]} "
+                 f"{len_by_area.iloc[0]:,.0f}자로 최장. 긴 본문일수록 쟁점·심사 논거가 많다는 뜻이라, "
+                 f"길이 분포는 어떤 유형이 '설명이 필요한 분쟁'인지 가늠하는 간접 지표가 됨.")
+
+    insight_box(lines)
+    st.caption("위 수치는 화면 조회 시점의 DB 집계로 자동 계산됩니다. (월배치 갱신 반영)")
+
 
 # ============================================================
 # 교차 인사이트 탭
@@ -523,9 +626,24 @@ def render_insight():
                "교차 대상은 은행ㆍ중소서민·금융투자 41건에 한정되며, 유형당 표본이 적어 "
                "통계적 결론보다 탐색적 참고 지표로 제공합니다.")
 
+    # ---------- 0. 교차분석 핵심 요약 (동적 계산) ----------
+    cross = run_query("SELECT * FROM v_dispute_product_cross")
+    disputes_all = load_disputes()
+    if not cross.empty and not disputes_all.empty:
+        unmatched = int(cross[cross["product_category"] == "미매칭"]["dispute_count"].sum())
+        yeosusin = disputes_all[disputes_all["dispute_type"] == "여ㆍ수신"]
+        insight_box([
+            f"<b>교차의 핵심 발견</b> — 상품 데이터와 직접 연결 가능한 분쟁은 '여ㆍ수신' 유형 "
+            f"<b>{len(yeosusin)}건</b>뿐이고, {unmatched}건은 대응 상품이 없어 미매칭. "
+            f"즉 <b>'상품 스펙 위반'형 분쟁은 소수</b>이며, 대다수는 지급 심사·약관 해석 단계에서 발생 — "
+            f"이것이 본 분석이 상품-분쟁을 1:1 매칭 대신 '조건 관련 분쟁 요인 탐색' 프레임으로 설계된 근거.",
+            f"<b>데이터 구조가 주는 교훈</b> — 원본에 상품↔분쟁 공유 코드가 없다는 사실 자체가 발견. "
+            f"금융 공시 데이터와 분쟁 데이터가 연결 고리 없이 관리되고 있어, 소비자가 두 정보를 함께 보려면 "
+            f"본 서비스 같은 별도의 통합 계층이 필요함.",
+        ])
+
     # ---------- 1. 상품카테고리 x 분쟁유형 교차 건수 ----------
     st.markdown("##### 상품카테고리 × 분쟁유형 교차 건수")
-    cross = run_query("SELECT * FROM v_dispute_product_cross")
     if cross.empty:
         st.info("교차 데이터가 없습니다.")
     else:

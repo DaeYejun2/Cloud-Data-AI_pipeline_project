@@ -82,21 +82,29 @@
 git clone https://github.com/DaeYejun2/Cloud-Data-AI_pipeline_project.git ~/finlife-pipeline
 cd ~/finlife-pipeline
 
-# 2) PostgreSQL 16 설치 및 자동 시작 설정
+# 2) Block Volume 마운트 (attach된 데이터 디스크 = /dev/sdb)
+sudo mkfs.xfs /dev/sdb
+sudo mkdir -p /data && sudo mount /dev/sdb /data && sudo chown opc:opc /data
+# 재부팅 자동 마운트 등록 — nofail: 볼륨 인식 지연 시에도 부팅 중단 방지
+echo "UUID=$(sudo blkid -s UUID -o value /dev/sdb) /data xfs defaults,nofail 0 2" \
+ | sudo tee -a /etc/fstab
+mkdir -p /data/raw && ln -s /data/raw ~/finlife-pipeline/data/raw
+
+# 3) PostgreSQL 16 설치 및 자동 시작 설정
 sudo dnf install -y postgresql16-server
 sudo /usr/pgsql-16/bin/postgresql-16-setup initdb
 sudo systemctl enable --now postgresql-16
 
-# 3) DB/스키마 생성
+# 4) DB/스키마 생성
 sudo -u postgres createdb finlife_pipeline
 psql -U postgres -d finlife_pipeline -f db/schema2.sql
 
-# 4) 파이썬 가상환경 및 의존성
+# 5) 파이썬 가상환경 및 의존성
 python3 -m venv ~/venv && source ~/venv/bin/activate
 pip install requests beautifulsoup4 pandas sqlalchemy psycopg2-binary \
             streamlit plotly scikit-learn oci
 
-# 5) 환경변수 파일 작성 (파일 권한 600 권장)
+# 6) 환경변수 파일 작성 (파일 권한 600 권장)
 cat > .env << 'ENV'
 export FINLIFE_API_KEY="발급받은_인증키"
 export PGHOST=localhost PGPORT=5432 PGDATABASE=finlife_pipeline
@@ -109,7 +117,7 @@ chmod 600 .env
 
 ```bash
 chmod +x run_pipeline.sh
-./run_pipeline.sh          # 전체 원스텝 실행 (약 10~15분)
+./run_pipeline.sh          # 전체 원스텝 실행
 ```
 
 개별 단계 실행도 가능합니다.
@@ -132,10 +140,53 @@ crontab -e
 
 ### 3.5 웹 서비스 기동
 
+Streamlit은 systemd 서비스로 등록하여 SSH 세션 종료·프로세스 다운·VM 재부팅 시에도 자동 복구
+되도록 상시 운영합니다
+
 ```bash
-source .env
-nohup streamlit run webapp/app.py --server.port 8501 --server.address 127.0.0.1 &
+# systemd 전용 환경파일
+cat > .env.systemd << 'ENV'
+FINLIFE_API_KEY=발급받은_인증키
+PGHOST=localhost
+PGPORT=5432
+PGDATABASE=finlife_pipeline
+PGUSER=postgres
+PGPASSWORD=비밀번호
+ENV
+chmod 600 .env.systemd
+
+# systemd 서비스 등록
+sudo tee /etc/systemd/system/streamlit-dashboard.service << 'EOF'
+[Unit]
+Description=Finlife EDA Streamlit Dashboard
+After=network.target postgresql-16.service
+
+[Service]
+User=opc
+WorkingDirectory=/home/opc/finlife-pipeline/webapp
+EnvironmentFile=/home/opc/finlife-pipeline/.env.systemd
+ExecStart=/home/opc/venv/bin/streamlit run app.py --server.port 8501 --server.address 
+127.0.0.1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now streamlit-dashboard
+
 ```
+
+Oracle Linux 8은 SELinux(Enforcing)가 systemd의 /home 하위 파일 접근을 차단하므로 permissive로
+전환하고, OS 방화벽(firewalld)에서 80 포트를 개방합니다.
+
+```bash
+sudo sed -i 's/^SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config
+sudo setenforce 0
+sudo firewall-cmd --permanent --add-service=http && sudo firewall-cmd --reload
+```
+
 
 nginx 리버스 프록시 설정 예시 (`/etc/nginx/conf.d/finlife.conf`):
 
@@ -156,7 +207,8 @@ server {
 sudo systemctl enable --now nginx
 ```
 
-이후 브라우저에서 `http://140.238.29.51/` 접속.
+VM 재부팅 후에도 PostgreSQL → Streamlit → nginx가 자동 기동되는 것을 확인했습니다. 이후 브라우저에서 http://140.238.29.51/ 접속.
+
 
 ---
 
@@ -230,9 +282,9 @@ cron (매월 1일 03:00)
 ```
 finlife-pipeline/
 ├── run_pipeline.sh              # 전체 파이프라인 원스텝 실행 (cron 등록 대상)
-├── .env                         # 환경변수 템플릿 (실제 .env·.env.systemd는 git 미포함)
+├── .env.example                 # 환경변수 템플릿 (실제 .env·.env.systemd는 git 미포함)
 ├── data/
-│   └── raw/                     # 원천 CSV 15종 (Block Volume)
+│   └── raw/ -> /data/raw                    # 원천 CSV 15종 (Block Volume)
 ├── db/
 │   └── schema2.sql              # PostgreSQL 스키마 (테이블 17종 + VIEW 2종)
 ├── scripts/

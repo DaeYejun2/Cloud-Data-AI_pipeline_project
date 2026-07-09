@@ -45,7 +45,7 @@
 | 리소스 | 용도 |
 |---|---|
 | **Compute VM** (Oracle Linux, Public IP) | 파이프라인 전 단계 실행 환경 (수집 스크립트, PostgreSQL, Streamlit, nginx) |
-| **Boot/Block Volume** | 원천 CSV(`data/raw/`) 및 PostgreSQL 데이터 디렉토리 상주 |
+| **Block Volume** | 원천 CSV(`data/raw/`) 및 PostgreSQL 데이터 디렉토리 상주 |
 | **Object Storage** (`bucket-06-cbnu-lv2`) | 원천 CSV의 날짜별 스냅샷 백업 (`raw/YYYYMMDD/…`) — 수집 이력 추적 및 원천 데이터 유실 대비 |
 | **VCN + 보안목록** | 80(웹 서비스)/22(SSH) 포트 인바운드 허용 |
 
@@ -230,7 +230,7 @@ cron (매월 1일 03:00)
 ```
 finlife-pipeline/
 ├── run_pipeline.sh              # 전체 파이프라인 원스텝 실행 (cron 등록 대상)
-├── .env                         # 환경변수 (API 키·DB 접속, 커밋 제외)
+├── .env                         # 환경변수 템플릿 (실제 .env·.env.systemd는 git 미포함)
 ├── data/
 │   └── raw/                     # 원천 CSV 15종 (Block Volume)
 ├── db/
